@@ -8,7 +8,9 @@ execfile('../common/figures.py')
 
 
 def landscapes(x, shift=0, noise=0):
-    return float(cos(2*x + shift * pi) + random.normal(0, 0.05 * pi, 1))
+    return float(cos(0.2*x + shift * pi) + random.normal(0, 0.05 * pi, 1))
+#    return float(cos(2*x + shift * pi) + random.normal(0, 0.05 * pi, 1))
+
 
 #################################
 # PARAMETERS
@@ -53,10 +55,22 @@ for i in range(num_landscapes):
 ##################################
 # NORMING AND BINNING
 ##################################
-F = [[j/sum(E[i]) for j in E[i]] for i in range(num_landscapes)]
+# This is the most explicit, slowest renomralization.
+F = zeros((num_landscapes, len(x)))  # Normalized probabilities
+for i in range(num_landscapes):
+    OldMax = max(E[i])
+    OldMin = min(E[i])
+    NewMax = 1.0
+    NewMin = 0.0
+    OldRange = (OldMax - OldMin)
+    NewRange = (NewMax - NewMin)
+    F[i] = [(((E[i][j] - OldMin) * NewRange) / OldRange) + NewMin
+            for j in range(len(E[i]))]
 
-#    counts, edges = histogram(E[i], range=(0, max(x)), bins=100, normed=True)
-#    mids = (edges[:-1]+edges[1:])/2.
+##################################
+# DIFFUSION ON THE LANDSCAPE
+##################################
+
 
 ##################################
 # PLOTTING
