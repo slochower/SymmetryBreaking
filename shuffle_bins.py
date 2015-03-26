@@ -7,18 +7,34 @@ import matplotlib.cm as cm
 
 execfile('../common/figures.py')
 
-debug = False
+debug = True
+animation, density, annotate = False, False, True
 
-def landscapes(x, shift=0, noise=0):
-#    return float((cos(2*x + shift * pi)/4 + random.normal(0, 0.05 * pi, 1))/4)
-    return float(cos(2*x + shift * pi)*100 + 0.0)
-#    return float(random.normal(0, 0.05 * pi, 1))
+
+def landscapes(x, shift=0):
+    return float(cos(2*x + shift * pi)*10 + 0.0)
+
+
+def landscapes_noise(x, shift=0, noise=0):
+    return float((cos(2*x + shift * pi)/4 + random.normal(0, 0.05 * pi, 1))/4)
+
+
+def find_nearest(array, value):
+    idx = (abs(array-value)).argmin()
+    return array[idx]
+
+def force_at_position(x, dx):
+    energies = [landscapes(j) for j in [positions[k] for k in
+                range(len(positions))]]
+    force = -diff(energies) / dx
+    return force
+
 
 #################################
 # PARAMETERS
 #################################
 num_landscapes = 1
-dx, dt, timesteps = 0.01, 1, 100000
+dx, dt, timesteps = 0.01, 1, 10000
 q = arange(0, 2 * pi, dx)
 shift = pi                # Shift of landscape between holo and apo
 
@@ -39,165 +55,188 @@ for i in range(num_landscapes):
 # BROWNIAN MOTION ON THE LANDSCAPE
 ##################################
 
-for kT in range(10,1000,10):
-    for i in range(num_landscapes):
-        positions = []
-        jumps = []
-        fluxes = []
-        x = pi     # Start Brownian walker at position x = pi
-        force = -diff(E[i]) / dx
-        D = 1      # Arbitrary
+for i in range(num_landscapes):
+    positions = []
+    jumps = []
+    fluxes = []
+    x = pi     # Start Brownian walker at position x = pi
+    force = -diff(E[i]) / dx
+    D = 0.1      # Arbitrary
 #################################
-#        kT = 100.0  # Arbitrary
+    kT = 100.0  # Arbitrary
 #################################
-        for t in range(timesteps):
-            swap = 0
-            gamma = random.normal(loc=0.0, scale=2*D*dt)
-            new_x = x + (D/kT) * force[x] * dt + gamma
-            if new_x > max(q):
-    #            print 'Wrapping {} to {}'.format(new_x, min(q)+(new_x-max(q)))
-                tmp = new_x - x
-                new_x = min(q) + (new_x-max(q))
-                swap = 1
-    #            print 'Setting swap to {}'.format(swap)
-    #            print 'Jump = {}'.format(new_x - x + swap*(max(q)-min(q)))
-            elif new_x < min(q):
-    #            print 'Wrapping {} to {}'.format(new_x, max(q) -
-    #                                             abs((new_x-min(q))))
-                tmp = new_x - x
-                new_x = max(q) - abs(new_x - min(q))
-                swap = -1
-            else:
-                swap = 0
-            fluxes.append(swap)
-            positions.append(new_x)
-            jump = new_x - x + swap*(max(q)-min(q))
-            if (abs(jump) > 5):
-                print new_x
-                print x
-                print swap
-                print 'Delta = {}'.format(tmp)
-                print 'Jump =  {} '.format(new_x - x + swap*(max(q)-min(q)))
-                break
-            jumps.append(jump)
-            x = new_x
-        boltzmann = exp([-E[i][j]/kT for j in range(len(E[i]))])
+    positions.append(x)
+    timesteps = 10
+    for t in range(timesteps):
+        swap = 0
+        gamma = random.normal(loc=0.0, scale=2*D*dt)
+#        new_x = x + (D/kT) * force[x] * dt + gamma
+        new_x = x + force[x] * dt
+        if debug:
+            print 't = {} \t x = {}, force * dt = {}, new_x = {}'.format(float(t), float(x), float(force[x]*dt), float(new_x))
 
-
-    ##################################
-    # PLOTTING
-    ##################################
-    '''
-    fig, gs, axes = generate_axes_pad(nrows=num_landscapes, ncols=4, v_pad=0.3,
-                                      h_pad=0.2, figsize=(12, 6))
-    for i in range(num_landscapes):
-        if i % 2 == 0:
-            c = 'r'
-            t = 'Apo'
+        if new_x > max(q):
+            print 'Wrapping {} to {}'.format(new_x, min(q)+(new_x-max(q)))
+            tmp = new_x - x
+            new_x = min(q) + (new_x-max(q))
+            swap = 1
+            if debug:
+                print 'Setting swap to {}'.format(swap)
+                print 'Jump = {}'.format(new_x - x + swap*(max(q)-min(q)))
+        elif new_x < min(q):
+            if debug:
+                print 'Wrapping {} to {}'.format(new_x, max(q) -
+                                                 abs((new_x-min(q))))
+            tmp = new_x - x
+            new_x = max(q) - abs(new_x - min(q))
+            swap = -1
         else:
-            c = 'b'
-            t = 'Holo'
-        ax = axes[i][0]
-        ax.plot(q, E[i], color=c, lw=2)
-        ax.set_title(t + ' energy landscape')
-        ax = axes[i][1]
-        lbl = u'$x(t+1) = x(t) + \\frac{D}{kT} F \\Delta t + \\Gamma$'
-        ax.scatter(positions, zeros(len(positions)), label=lbl, color='k',
-                   alpha=0.01)
-    #    ax.plot(range(len(positions)), positions, color='k')
-        ax.set_ylim(-1, 1)
-        ax.set_title('Positions along reaction coordinate')
-        ax.legend()
-        ax = axes[i][2]
-        counts, edges = histogram(positions, range=(min(q), max(q)),
-                                  bins=10, normed=True)
-        mids = (edges[1:]+edges[:-1])/2.
-        ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
-        ax.set_title('Histogram of positions')
-
-        ax = axes[i][3]
-        ax.plot(positions[::-1], range(len(positions))[::-1], color='k')
-        ax.set_ylabel('Time')
-        ax.set_xlabel('Position')
-        ax.set_title('Kymograph')
-    ax.set_xlabel('Arbitrary reaction coordinate')
-    plt.show()
-    '''
-    c='r'
+            swap = 0
+        fluxes.append(swap)
+        positions.append(new_x)
+        jump = new_x - x + swap*(max(q)-min(q))
+        if (abs(jump) > 5):
+            print new_x
+            print x
+            print swap
+            print 'Delta = {}'.format(tmp)
+            print 'Jump =  {} '.format(new_x - x + swap*(max(q)-min(q)))
+            break
+        jumps.append(jump)
+        x = new_x
+    boltzmann = exp([-E[i][j]/kT for j in range(len(E[i]))])
 
 
-    #fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
-    #                                  h_pad=0.2, figsize=(12, 12))
-    #ax = axes[0][0]
-    #ax.plot(range(len(boltzmann)), [i/sum(boltzmann) for i in boltzmann],
-    #        color='k')
-    #plt.show()
+##################################
+# PLOTTING
+##################################
 
-    fig, gs, axes = generate_axes_pad(nrows=2, ncols=2, v_pad=0.3,
-                                      h_pad=0.2, figsize=(12, 12))
-    ax = axes[0][0]
-    ax.plot(q, E[0], color=c, lw=2)
+c = 'r'
+fig, gs, axes = generate_axes_pad(nrows=3, ncols=2, v_pad=0.3,
+                                  h_pad=0.2, figsize=(12, 12))
+ax = axes[0][0]
+ax.plot(q, E[0], color=c, lw=2)
+ax.set_title('Energy landscape')
+
+ax = axes[0][1]
+ax.plot(q[1:], force, color=c, lw=2)
+ax.set_title('Force')
+
+ax = axes[1][0]
+ax.plot(q, boltzmann, color='k', lw=2, label='kT = {}'.format(kT))
+ax.set_title('Boltzmann distribution')
+ax.legend()
+
+if annotate:
+    ax = axes[1][1]
     ax.set_title('Energy landscape')
-
-    ax = axes[0][1]
-    # lbl = u'$x(t+1) = x(t) + \\frac{D}{kT} F \\Delta t + \\Gamma$'
-    # ax.scatter(positions, zeros(len(positions)), label=lbl, color='k',
-    #            alpha=0.01)
-    # #    ax.plot(range(len(positions)), positions, color='k')
-    # ax.set_ylim(-1, 1)
-    # ax.set_title('Positions along reaction coordinate')
-    # ax.legend()
-    ax.plot(q[1:], force, color=c, lw=2)
-    ax.set_title('Force')
-
-    ax = axes[1][0]
-    counts, edges = histogram(positions, range=(min(q), max(q)),
-                              bins=10, normed=True)
-    mids = (edges[1:]+edges[:-1])/2.
-    ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
-
-    #################################
-    # BOLTZMANN CALCULATION DOESN'T SEEM TO BE WORKING BECAUSE
-    # PROBABILITIES CHANGE WHEN PARAMETER SCANNING FOR KT
-    ##################################
-
-    reduced_bins = 11  # This is num bins + 1
-    bins = linspace(0, len(boltzmann), num=reduced_bins)
-    reduced = [sum(boltzmann[int(ceil(bins[i])):int(floor(bins[i+1]))])
-               for i in range(len(bins)-1)]
-    offset = abs(mids[1]-mids[0])/2
-    ax.plot(mids+offset, [i/(sum(reduced)*(edges[1]-edges[0])) for i in reduced],
-            color='k', alpha=0.5, marker='o', ls='--', label='Boltzmann')
-    #ax.bar(mids, reduced, color='k', alpha=0.5,
-    #       width=mids[1]-mids[0])
-    ax.set_title('Histogram of positions')
+    ax.plot(q, E[0], color='r', lw=2)
+    energies = [landscapes(j) for j in [positions[k] for k in
+                range(len(positions))]]
+    ax.scatter(positions, energies,
+               c='k',
+               s=200, lw=0, alpha=1)
+    labels = ['Point {0}'.format(i) for i in range(len(positions))]
+    for label, x, y in zip(labels, positions, energies):
+        plt.annotate(
+                     label,
+                     xy = (x, y), xytext = (-20, 20),
+                     textcoords = 'offset points', ha = 'right', 
+                     va = 'bottom',
+                     bbox = dict(boxstyle = 'round,pad=0.5', fc = 'yellow', 
+                     alpha = 0.5),
+                     arrowprops = dict(arrowstyle = '->', 
+                     connectionstyle = 'arc3,rad=0'))
     ax.legend()
 
-    ax = axes[1][1]
-    counts, edges = histogram(jumps, range=(min(jumps), max(jumps)),
-                              bins=10, normed=True)
-    mids = (edges[1:]+edges[:-1])/2.
-    ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
-    ax.set_title('Histogram of step sizes')
-#    plt.show()
-    plt.savefig('shuffle_bins_kT.{}.png'.format(float(kT)))
-    
-    '''
+ax = axes[2][0]
+counts, edges = histogram(positions, range=(min(q), max(q)),
+                          bins=10, normed=True)
+mids = (edges[1:]+edges[:-1])/2.
+ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
+
+
+ax.set_title('Histogram of positions')
+ax.legend()
+
+ax = axes[2][1]
+counts, edges = histogram(jumps, range=(min(jumps), max(jumps)),
+                          bins=10, normed=True)
+mids = (edges[1:]+edges[:-1])/2.
+ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
+ax.set_title('Histogram of step sizes')
+plt.show()
+# plt.savefig('shuffle_bins_kT.{}.png'.format(float(kT)))
+plt.close(fig)
+
+if animation: 
+    for k in range(timesteps):
+        fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
+                                          h_pad=0.2, figsize=(12, 12))
+        ax = axes[0][0]
+        cmap = cm.jet
+        c = linspace(min(positions), max(positions), len(positions))
+        ax.set_title('Energy landscape')
+        ax.plot(q, E[0], color='r', lw=2)
+        cax = ax.scatter(positions[k],
+                         E[0][where(q == find_nearest(q, positions[k]))[0][0]],
+                         #c=c[k], cmap=cmap,
+                         c='k',
+                         s=200, lw=0, alpha=0.5,
+                         label='Net boundary crossings = {} \n Total boundary'
+                         ' crossings = {}'
+                         .format(sum(fluxes), sum(absolute(fluxes))))
+
+        ax.legend()
+        plt.savefig('tmp.{:02d}.png'.format(k))
+        plt.close(fig)
+    from subprocess import call
+    call(["ffmpeg", "-framerate", "4", "-i", "tmp.%02d.png", "-c:v",
+          "libx264", "-r", "30", "-pix_fmt", "yuv420p", "motion.mp4"])
+    call(["rm", "tmp*.png"])
+    import glob
+    import os
+    for fl in glob.glob("tmp*.png"):
+        os.remove(fl)
+
+if density: 
     fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
                                       h_pad=0.2, figsize=(12, 12))
     ax = axes[0][0]
-    cmap = cm.jet
-    c = linspace(min(positions), max(positions), len(positions))
-    cax = ax.scatter(positions[::-1], range(len(positions))[::-1], c=c, cmap=cmap,
-                     s=40, lw=0, alpha=0.2,
-                     label='Net boundary crossings = {} \n Total boundary'
-                     ' crossings = {}'
-                     .format(sum(fluxes), sum(absolute(fluxes))))
-    ax.set_title('Kymograph')
-    ax.set_xlabel('Position')
-    ax.set_ylabel('Time (number of steps)')
+    ax.set_title('Energy landscape')
+    ax.plot(q, E[0], color='r', lw=2)
+    ax.scatter(positions, [-15 for k in range(len(positions))],
+                         c='k',
+                         s=200, lw=0, alpha=0.005,
+                         label='Net boundary crossings = {} \n Total boundary'
+                         ' crossings = {}'
+                         .format(sum(fluxes), sum(absolute(fluxes))))
     ax.legend()
-    cbar = fig.colorbar(cax, ticks=[min(positions), max(positions)])
-    cbar.ax.set_yticklabels(['End', 'Start'])
+    plt.savefig('shuffle_bins_density.png')
+    plt.close(fig)
+
+if annotate:
+    fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
+                                      h_pad=0.2, figsize=(12, 12))
+    ax = axes[0][0]
+    ax.set_title('Energy landscape')
+    ax.plot(q, E[0], color='r', lw=2)
+    energies = [landscapes(j) for j in [positions[k] for k in
+                range(len(positions))]]
+    ax.scatter(positions, energies,
+               c='k',
+               s=200, lw=0, alpha=1)
+    labels = ['Point {0}'.format(i) for i in range(len(positions))]
+    for label, x, y in zip(labels, positions, energies):
+        plt.annotate(
+                     label,
+                     xy = (x, y), xytext = (-20, 20),
+                     textcoords = 'offset points', ha = 'right', 
+                     va = 'bottom',
+                     bbox = dict(boxstyle = 'round,pad=0.5', fc = 'yellow', 
+                     alpha = 0.5),
+                     arrowprops = dict(arrowstyle = '->', 
+                     connectionstyle = 'arc3,rad=0'))
+    ax.legend()
     plt.show()
-    '''
+    plt.close(fig)
