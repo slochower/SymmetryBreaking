@@ -3,17 +3,24 @@
 from math import *
 from numpy import *
 from scipy.stats import norm
-import matplotlib.cm as cm
 # from scipy import optimize
+import time
+import datetime
 
 execfile('../common/figures.py')
 
-debug = True
-animation, density, annotate = False, True, False
+debug, deterministic = False, False                 # Tests
+animation, density, annotate = False, True, False   # Plotting options
+plot_separate = False                               # Plotting options
+plot_together = True
 
 
 def landscapes(x, shift=0):
-    return float(cos(2*x + shift * pi)*10 + 0.0)
+    # return float(cos(2*x + shift * pi)*10 + 0.0)
+    period = 1.8*pi
+    amplitude = 10
+    return(float(amplitude * ((x+shift)/period -
+                 floor(1/2 + (x+shift)/period))))
 
 
 def landscapes_noise(x, shift=0, noise=0):
@@ -24,173 +31,237 @@ def find_nearest(array, value):
     idx = (abs(array-value)).argmin()
     return array[idx]
 
-def force(x, dx):
-    return float(-(landscapes(x+dx, shift=shift) -
-                   landscapes(x, shift=shift)) / dx)
+
+def force(x, dx, s):
+    return float(-(landscapes(x+dx, shift=s) -
+                   landscapes(x, shift=s)) / dx)
 
 
 #################################
 # PARAMETERS
 #################################
-num_landscapes = 1
-dx, dt, timesteps = 0.01, 1, 10000
-q = arange(0, 2 * pi, dx)
-shift = pi                # Shift of landscape between holo and apo
+num_landscapes = 5          # Number of protein states
+dx = 0.01                   # Reaction coordinate spacing
+q = arange(0, 2 * pi, dx)   # Define reaction coordinate
+dt = 1                      # Time resolution (not really used)
+timesteps = 100000           # Number of steps for walker
+E = []                      # Container for energy landscapes
+walker = []                 # Positions of the walker over all possible landscapes
+net_flux = []
 
-##################################
-# BUILD ENERGY LANDSCAPES
-##################################
-E = []    # Container for energy landscapes
-s = []    # List of beginning points for moving on the energy landscapes
+if plot_together:
+    fig, gs, axes = generate_axes_pad(nrows=5, ncols=3, v_pad=0.3,
+                                      h_pad=0.2, figsize=(12, 12))
+
 
 for i in range(num_landscapes):
     if i % 2 == 0:
-        j = 0.0
-        j = shift
+        shift = 0.0
+        c = clrs[i % 9]
     else:
-        j = shift
-    E.append([landscapes(i, shift=j) for i in q])
+        shift = pi
+        c = clrs[i % 9]
+    E.append([landscapes(pos, shift=shift) for pos in q])
 
-##################################
-# BROWNIAN MOTION ON THE LANDSCAPE
-##################################
+    ##################################
+    # BROWNIAN MOTION ON THE LANDSCAPE
+    ##################################
 
-for i in range(num_landscapes):
-    positions = []
-    jumps = []
-    fluxes = []
-    x = pi     # Start Brownian walker at position x = pi
-#    force = -diff(E[i]) / dx
-    D = 0.1      # Arbitrary
-#################################
-    kT = 100.0  # Arbitrary
-#################################
-    positions.append(x)
+    positions = []        # List of walker positions
+    jumps = []            # List of walker steps
+    fluxes = []           # List of PBC transitions (+/- 1)
+    if i == 0:        # Start Brownian walker at position pi
+        x = pi
+    D = 0.1      # Arbitrary -- these two work together!
+    kT = 100.0   # Arbitrary -- these two work together!
+    positions.append(x)   # Set initial position
+    walker.append(x)
+    print('Starting walker at x = {}'.format(x))
+
+    if debug:
+        print('Starting walker at x = {}'.format(x))
     for t in range(timesteps):
         swap = 0
         gamma = random.normal(loc=0.0, scale=2*D*dt)
-        new_x = x + (D/kT) * force(x,dx) * dt + gamma
-#        new_x = x + force(x,dx) * dt
+        new_x = x + (D/kT) * force(x, dx, shift) * dt + gamma
+        if deterministic:
+            new_x = x + force(x, dx, shift) * dt
         if debug:
-            print 't = {} \t x = {}, force * dt = {}, new_x = {}'.format(float(t), float(x), float(force(x,dx)*dt), float(new_x))
+            print 't = {} \t x = {}, force * dt = {}, new_x = {}' \
+                  .format(float(t), float(x),
+                          float(force(x, dx, shift)*dt), float(new_x))
 
         if new_x > max(q):
-            print 'Wrapping {} to {}'.format(new_x, min(q)+(new_x-max(q)))
-            tmp = new_x - x
             new_x = min(q) + (new_x-max(q))
             swap = 1
             if debug:
+                print 'Wrapping {} to {}' \
+                      .format(new_x, min(q)+(new_x-max(q)))
                 print 'Setting swap to {}'.format(swap)
                 print 'Jump = {}'.format(new_x - x + swap*(max(q)-min(q)))
         elif new_x < min(q):
             if debug:
                 print 'Wrapping {} to {}'.format(new_x, max(q) -
                                                  abs((new_x-min(q))))
-            tmp = new_x - x
             new_x = max(q) - abs(new_x - min(q))
             swap = -1
         else:
             swap = 0
         fluxes.append(swap)
         positions.append(new_x)
+        walker.append(new_x)
         jump = new_x - x + swap*(max(q)-min(q))
-        if (abs(jump) > 5):
+        if (abs(jump) > max(q)):
             print new_x
             print x
             print swap
-            print 'Delta = {}'.format(tmp)
             print 'Jump =  {} '.format(new_x - x + swap*(max(q)-min(q)))
-            break
+            print 'WARNING: JUMPED ACROSS AN ENTIRE LANDSCAPE.'
         jumps.append(jump)
         x = new_x
     boltzmann = exp([-E[i][j]/kT for j in range(len(E[i]))])
+    pdf = boltzmann / sum([boltzmann[j]*dx for j in boltzmann])
+
+    print 'Net flux on energy landscape {} = {} in {} steps' \
+          .format(i, sum(fluxes), timesteps)
+    net_flux.append(fluxes)
+    print 'Final x = {}'.format(x)
+
+    if plot_separate:
+
+        ##################################
+        # PLOTTING INDIVIDUAL LANDSCAPES
+        ##################################
+
+        fig, gs, axes = generate_axes_pad(nrows=3, ncols=2, v_pad=0.3,
+                                          h_pad=0.2, figsize=(12, 12))
+        ax = axes[0][0]
+        ax.plot(q, E[i], color=c, lw=2)
+        ax.set_title('Energy landscape')
+
+        ax = axes[0][1]
+        ax.plot(q, [force(x, dx, shift) for x in q], color=c, lw=2)
+        ax.set_title('Force')
+
+        ax = axes[1][0]
+        ax.plot(q, pdf, color='k', lw=2, label='kT = {}'.format(kT))
+        ax.set_title('Probability density function')
+        ax.legend()
+
+        ax = axes[1][1]
+        ax.set_title('Position density along energy landscape')
+        ax.plot(q, E[i], color=c, lw=2)
+        energies = [landscapes(j, shift=shift) for j in [positions[k] for k in
+                    range(len(positions))]]
+        ax.scatter(positions, energies,
+                   c='k',
+                   s=200, lw=0, alpha=100*(1/float(timesteps)))
+
+        ax = axes[2][0]
+        counts, edges = histogram(positions, range=(min(q), max(q)),
+                                  bins=10, normed=True)
+        mids = (edges[1:]+edges[:-1])/2.
+        ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
+
+        ax.set_title('Histogram of positions')
+        ax.legend()
+
+        ax = axes[2][1]
+        counts, edges = histogram(jumps, range=(min(jumps), max(jumps)),
+                                  bins=10, normed=True)
+        mids = (edges[1:]+edges[:-1])/2.
+        ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
+        mu, std = norm.fit(jumps)
+        xmin, xmax = min(jumps), max(jumps)
+        x = linspace(xmin, xmax, 100)
+        p = norm.pdf(x, mu, std)
+        ax.plot(x, p, 'k', linewidth=2)
+        ax.set_title('Step sizes: $\mu = {0:.4f}, '
+                     '\sigma = {0:.3f}$'.format(mu, std))
+        ax.legend()
+        ts = time.time()
+        st = datetime.datetime.fromtimestamp(ts).strftime('%Y-%m-%d')
+        # plt.savefig('{}-individual-{}.png'.format(st,ts)
+        # plt.show()
+        plt.savefig('{}-individual.png'.format(i+1))
+        # plt.close(fig)
 
 
-##################################
-# PLOTTING
-##################################
+        ##################################
+        # PLOTTING MULTIPLE LANDSCAPES
+        ##################################
+        fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
+                                          h_pad=0.2, figsize=(12, 12))
+        ax = axes[0][0]
+        counts, edges = histogram(walker, range=(min(q), max(q)),
+                                  bins=10, normed=False)
+        mids = (edges[1:]+edges[:-1])/2.
+        ax.bar(mids, counts, color=c, width=mids[1]-mids[0],
+               label='Net flux = {} \n Total steps = {}'.
+               format(sum(net_flux), shape(net_flux)[0]*shape(net_flux)[1]))
 
-c = 'b'
-fig, gs, axes = generate_axes_pad(nrows=3, ncols=2, v_pad=0.3,
-                                  h_pad=0.2, figsize=(12, 12))
-ax = axes[0][0]
-ax.plot(q, E[0], color=c, lw=2)
-ax.set_title('Energy landscape')
+        ax.set_title('Histogram of Brownian walker positions, after {} landscapes'.format(i+1))
+        ax.legend()
+        #plt.show()
+        plt.savefig('{}.png'.format(i+1))
 
-ax = axes[0][1]
-ax.plot(q, [force(x, dx) for x in q], color=c, lw=2)
-ax.set_title('Force')
+    if plot_together:
+        ##################################
+        # PLOTTING LANDSCAPES TOGETHER
+        ##################################
+        if i < 5:
 
-ax = axes[1][0]
-ax.plot(q, boltzmann, color='k', lw=2, label='kT = {}'.format(kT))
-ax.set_title('Boltzmann distribution')
-ax.legend()
+            ax = axes[i][0]
+            ax.plot(q, E[i], color=c, lw=2)
+            ax.scatter(positions[0], landscapes(positions[0], shift=shift),
+                       color='k', s=40, zorder=10, label='Start')
+            ax.scatter(positions[-1], landscapes(positions[-1], shift=shift),
+                       color='k', alpha=0.5, s=40, zorder=10, label='End')
+            # ax.legend()
+            ax.set_title('Energy landscape')
 
-ax = axes[1][1]
-ax.set_title('Position density along energy landscape')
-ax.plot(q, E[0], color=c, lw=2)
-energies = [landscapes(j,shift=shift) for j in [positions[k] for k in
-            range(len(positions))]]
-ax.scatter(positions, energies,
-           c='k',
-           s=200, lw=0, alpha=0.003)
-labels = ['Point {0}'.format(i) for i in range(len(positions))]
-'''
-for label, x, y in zip(labels, positions, energies):
-    plt.annotate(
-                 label,
-                 xy = (x, y), xytext = (-20, 20),
-                 textcoords = 'offset points', ha = 'right', 
-                 va = 'bottom',
-                 bbox = dict(boxstyle = 'round,pad=0.5', fc = 'yellow', 
-                 alpha = 0.5),
-                 arrowprops = dict(arrowstyle = '->', 
-                 connectionstyle = 'arc3,rad=0'))
-ax.legend()
-'''
-ax = axes[2][0]
-counts, edges = histogram(positions, range=(min(q), max(q)),
-                          bins=10, normed=True)
-mids = (edges[1:]+edges[:-1])/2.
-ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
+            ax = axes[i][1]
+            counts, edges = histogram(positions, range=(min(q), max(q)),
+                                      bins=10, normed=True)
+            mids = (edges[1:]+edges[:-1])/2.
+            ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
+            ax.legend()
+            ax.set_title('Histogram, Net flux = {}'.format(sum(fluxes)))
+            # Add label
 
+            ax = axes[i][2]
+            counts, edges = histogram(walker, range=(min(q), max(q)),
+                                      bins=10, normed=False)
+            mids = (edges[1:]+edges[:-1])/2.
+            ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
 
-ax.set_title('Histogram of positions')
-ax.legend()
-
-ax = axes[2][1]
-counts, edges = histogram(jumps, range=(min(jumps), max(jumps)),
-                          bins=10, normed=True)
-mids = (edges[1:]+edges[:-1])/2.
-ax.bar(mids, counts, color=c, width=mids[1]-mids[0])
-mu, std = norm.fit(jumps)
-xmin, xmax = min(jumps), max(jumps)
-x = linspace(xmin, xmax, 100)
-p = norm.pdf(x, mu, std)
-ax.plot(x, p, 'k', linewidth=2)
-ax.set_title('Step sizes: $\mu = {0:.4f}, \sigma = {0:.3f}$'.format(mu,std))
-ax.legend()
+            ax.set_title('Cumulative, Net flux = {}'.format(sum(net_flux)))
+            ax.legend()
+            plt.hold()
 plt.show()
-# plt.savefig('shuffle_bins_kT.{}.png'.format(float(kT)))
-plt.close(fig)
 
-if animation: 
+
+print('Overall net flux = {}'.format(sum(net_flux)))
+
+
+if animation:
     for k in range(timesteps):
         fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
                                           h_pad=0.2, figsize=(12, 12))
         ax = axes[0][0]
-        cmap = cm.jet
         c = linspace(min(positions), max(positions), len(positions))
         ax.set_title('Energy landscape')
-        ax.plot(q, E[0], color=c, lw=2)
-        cax = ax.scatter(positions[k],
-                         E[0][where(q == find_nearest(q, positions[k]))[0][0]],
-                         #c=c[k], cmap=cmap,
-                         c='k',
-                         s=200, lw=0, alpha=0.5,
-                         label='Net boundary crossings = {} \n Total boundary'
+        ax.plot(q, E[i], color=c, lw=2)
+        ax.scatter(positions[k],
+                   E[i][where(q == find_nearest(q,
+                        positions[k]))[0][0]],
+                   c='k',
+                   s=200, lw=0, alpha=0.5,
+                   label='Net boundary crossings = {} \n '
+                         'Total boundary'
                          ' crossings = {}'
-                         .format(sum(fluxes), sum(absolute(fluxes))))
+                         .format(sum(fluxes),
+                                 sum(absolute(fluxes))))
 
         ax.legend()
         plt.savefig('tmp.{:02d}.png'.format(k))
@@ -198,50 +269,3 @@ if animation:
     from subprocess import call
     call(["ffmpeg", "-framerate", "90", "-i", "tmp.%02d.png", "-c:v",
           "libx264", "-r", "30", "-pix_fmt", "yuv420p", "motion.mp4"])
-    call(["rm", "tmp*.png"])
-    import glob
-    import os
-#    for fl in glob.glob("tmp*.png"):
-#        os.remove(fl)
-
-if density: 
-    fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
-                                      h_pad=0.2, figsize=(12, 12))
-    ax = axes[0][0]
-    ax.set_title('Energy landscape')
-    ax.plot(q, E[0], color=c, lw=2)
-    ax.scatter(positions, [-15 for k in range(len(positions))],
-                         c='k',
-                         s=200, lw=0, alpha=0.005,
-                         label='Net boundary crossings = {} \n Total boundary'
-                         ' crossings = {}'
-                         .format(sum(fluxes), sum(absolute(fluxes))))
-    ax.legend()
-    plt.savefig('shuffle_bins_density.png')
-    plt.close(fig)
-
-if annotate:
-    fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
-                                      h_pad=0.2, figsize=(12, 12))
-    ax = axes[0][0]
-    ax.set_title('Energy landscape')
-    ax.plot(q, E[0], color=c, lw=2)
-    energies = [landscapes(j) for j in [positions[k] for k in
-                range(len(positions))]]
-    ax.scatter(positions, energies,
-               c='k',
-               s=200, lw=0, alpha=1)
-    labels = ['Point {0}'.format(i) for i in range(len(positions))]
-    for label, x, y in zip(labels, positions, energies):
-        plt.annotate(
-                     label,
-                     xy = (x, y), xytext = (-20, 20),
-                     textcoords = 'offset points', ha = 'right', 
-                     va = 'bottom',
-                     bbox = dict(boxstyle = 'round,pad=0.5', fc = 'yellow', 
-                     alpha = 0.5),
-                     arrowprops = dict(arrowstyle = '->', 
-                     connectionstyle = 'arc3,rad=0'))
-    ax.legend()
-    plt.show()
-    plt.close(fig)
