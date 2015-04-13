@@ -2,96 +2,83 @@
 
 from math import *
 from numpy import *
+from scipy import ndimage 
 
 from joblib import Parallel, delayed
 from joblib.pool import has_shareable_memory
 from timeit import default_timer as timer
 
 execfile('../common/figures.py')
-'''
-def landscapes(x, shift=0):
-    period = 1.8 * pi
-    amplitude = 10
-    window = 10
-
-    # If the input is an array, then the energy function is evaluated at
-    # every point in the array, and the complete landscape is returned.
-    if isinstance(x, ndarray):
-        sawtooth = amplitude * ((x + shift) / period -
-                                floor(1 / 2 + (x + shift) / period))
-        # This is necessary because the running average will drop the 
-        # first window-1 points, so we take advantage of PBCs.
-        tmp = concatenate((sawtooth[-window:], sawtooth))
-        smoothed = pd.rolling_mean(tmp, window=window)
-        if debug:
-            print('landscapes() called with array.')
-        return(smoothed[window:])
-    # If the input is a point (e.g., the walker is at some position and
-    # and we need to spit out the energy at that specific position) then
-    # we have to generate the landscape a little before and a little after
-    # that position, so it can be smoothed.
-    if isinstance(x, float):
-        # xx = arange(x - window * dx, x + window * dx, dx)
-        # The results are not consistent with arange().
-        xx = linspace(x - window * dx, x + window * dx, 2*window+1)
-        sawtooth = amplitude * ((xx + shift) / period -
-                                floor(1 / 2 + (xx + shift) / period))
-        smoothed = pd.rolling_mean(sawtooth, window=10)
-        if debug:
-            print('landscapes() called with float.')
-            print('x = {}'.format(x))
-
-        return(sawtooth[window:-window])
-    else:
-        print('Erorr computing energy landscape.')
-        print('type(x) = {}'.format(type(x)))
-'''
 
 def landscapes(x, shift=0):
     period = 2 * pi
-    amplitude = 10
-    if debug:
-        print('landscapes() reporting in with x = {}'.format(x))
+    amplitude = 40
+    window = 20
+
+    # If the input is an array, then the energy function is evaluated at
+    # every point in the array, and the complete landscape is returned.
     sawtooth = amplitude * ((x + shift) / period -
                             floor(1 / 2 + (x + shift) / period))
+    padded = concatenate((sawtooth, sawtooth, sawtooth))
+    smoothed = gaussian_filter(padded, window)
     if debug:
-        print('landscapes() reporting in with E = {}'.format(sawtooth))
-    return(sawtooth)
+        plt.figure()
+        plt.plot(range(len(padded)), padded, c='k', ls='--',
+                 label='Original (padded)')
+        plt.plot(range(len(smoothed)), smoothed, c='r', lw=2,
+                 label='Smoothed')
+        plt.legend()
+        plt.title('Step function landscapes padded and smoothed')
+        plt.show()
+    return(smoothed[len(sawtooth):2*len(sawtooth)])
 
 
-def landscapes(x, shift=0, noise=0):
-    return ((cos(2 * x + shift * pi))/2)
+def gaussian_filter(x, N):
+    return(ndimage.filters.gaussian_filter1d(input=x, sigma=N))
 
 
 def find_nearest(array, value):
     idx = (abs(array - value)).argmin()
-    return array[idx]
+    # return array[idx]
+    return idx
 
 
-def force(x, dx, s):
-    if debug:
-        print('Calculating force with x, x+dx, shift = {}, {}, {}'.
-              format(x, x+dx, s))
-    force = -(landscapes(x + dx, shift=s) -
-              landscapes(x, shift=s)) / dx
+def force(i, dx, energy):
+    force = -((energy[i+1] - energy[i]) / dx)
     if debug:
         print('Force = {}'.format(force))
     return float(force)
 
 
-def smooth(x, N):
-    # Boundary effects make this not so ideal.
-    return convolve(x, ones((N,)) / N, mode='valid')
+def force_lookup(array, value):
+    # Find the nearest index of the reaction coordinate.
+    nearest_index = find_nearest(array[:, 0], value)
+    
+    # import pdb; pdb.set_trace()
+    
+    # push = interp(value, array[:, 0][nearest_index-1:nearest_index+2],
+    #               array[:, 1][nearest_index-1:nearest_index+2])
+    push = interp(value, array[:, 0], array[:, 1])
+
+    if random.rand() > 1.1:
+        fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
+                                          h_pad=0.2, figsize=(12, 12))
+        ax = axes[0][0]
+        ax.plot(range(len(array[:, 1])), array[:, 1], color='g', lw=2,
+                label='Force')
+        ax.scatter(array[:, 0][nearest_index-1], array[:, 1][nearest_index-1],
+                   color='k', s=40, zorder=10, alpha=0.5)
+        ax.scatter(array[:, 0][nearest_index+1], array[:, 1][nearest_index+1],
+                   color='k', s=40, zorder=10, alpha=0.5)
+        ax.scatter(array[:, 0][nearest_index], push,
+                   color='k', s=40, zorder=10)
+        ax.set_title('Forces and interpolation')
+        plt.show()
+
+    return(push)
 
 
-def smooth_average(x, N):
-    y = zeros((len(x),))
-    for ctr in range(len(x)):
-        y[ctr] = sum(x[ctr:(ctr + N)])
-    return y / N
-
-
-def simulate(x, dx, D, kT, dt, shift, **kwargs):
+def simulate(x, dx, D, kT, dt, shift, forces, i, **kwargs):
 
     ##################################
     # BROWNIAN MOTION ON THE LANDSCAPE
@@ -99,7 +86,6 @@ def simulate(x, dx, D, kT, dt, shift, **kwargs):
     positions = []        # List of walker positions
     jumps = []            # List of walker steps
     fluxes = []           # List of PBC transitions (+/- 1)
-    forces = []           # List of forces on walker
     # positions.append(x)   # Set initial position
 
     if debug:
@@ -107,7 +93,8 @@ def simulate(x, dx, D, kT, dt, shift, **kwargs):
     for t in range(timesteps):
         swap = 0
         g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
-        F = force(x, dx, shift)
+#        F = force(x, dx, shift)
+        F = force_lookup(forces[i], x)
         new_x = x + (D / kT) * F * dt + g
         if deterministic:
             new_x = x + F * dt
@@ -142,7 +129,6 @@ def simulate(x, dx, D, kT, dt, shift, **kwargs):
             print 'Jump =  {} '.format(new_x - x + swap * (max(q) - min(q)))
             print 'WARNING: JUMPED ACROSS AN ENTIRE LANDSCAPE.'
         jumps.append(jump)
-        forces.append(F)
         x = new_x
 
     if debug:
@@ -158,7 +144,7 @@ def simulate(x, dx, D, kT, dt, shift, **kwargs):
         plt.savefig('figure.png')
         plt.close()
 
-    return(positions, jumps, fluxes, forces)
+    return(positions, jumps, fluxes)
 
 
 #################################
@@ -188,12 +174,21 @@ kT = 10
 walker = zeros((num_landscapes, timesteps))
 jumps = zeros((num_landscapes, timesteps))
 net_flux = zeros((num_landscapes, timesteps))
-forces = zeros((num_landscapes, timesteps))
 
 shift = [0 if i % 2 == 0 else pi for i in range(num_landscapes)]
 energy = [landscapes(q, shift[i]) for i in range(num_landscapes)]
 boltzmann = [exp(-energy[i]/kT) for i in range(num_landscapes)]
 pdf = [boltzmann[i] / sum(boltzmann[i]*dx) for i in range(num_landscapes)]
+
+# Precompute the forces!
+# Forces are being passed indices for energy, not positions now!
+# forces = [[((q[k], force(k, dx, energy[i]))) for k in range(len(q)-1)]
+#          for i in range(num_landscapes)]
+
+forces = array([[[q[k], force(k, dx, energy[i])] for k in range(len(q)-1)]
+                for i in range(num_landscapes)])
+
+
 
 start = timer()
 for i in range(num_landscapes):
@@ -202,8 +197,8 @@ for i in range(num_landscapes):
     else:
         position = walker[i-1][-1]
     print('Walking on landscape {}'.format(i))
-    walker[i], jumps[i], net_flux[i], forces[i] = simulate(position, dx,
-                                                 D, kT, dt, shift[i])
+    walker[i], jumps[i], net_flux[i] = simulate(position, dx,
+                                                 D, kT, dt, shift[i], forces, i)
 simulation_time = timer() - start
 print('Simulation took {} seconds'.format(simulation_time))
 
@@ -220,10 +215,10 @@ if plot_together:
     for i in range(num_landscapes):
         c = clrs[i % 9]
         ax = axes[i][0]
-        ax.scatter(walker[i][0], landscapes(walker[i][0], shift=shift[i]),
-                   color='k', s=40, zorder=10, label='Start')
-        ax.scatter(walker[i][-1], landscapes(walker[i][-1], shift=shift[i]),
-                   color='k', alpha=0.5, s=40, zorder=10, label='End')
+#        ax.scatter(walker[i][0], landscapes(walker[i][0], shift=shift[i]),
+#                   color='k', s=40, zorder=10, label='Start')
+#        ax.scatter(walker[i][-1], landscapes(walker[i][-1], shift=shift[i]),
+#                   color='k', alpha=0.5, s=40, zorder=10, label='End')
         ax.plot(q, energy[i], color=c, lw=2)
         ax.set_title('Energy landscape')
 
@@ -237,7 +232,8 @@ if plot_together:
         ax.set_title('Net flux = {}, kT = {}'.format(fluxes[i], kT))
 
         ax = axes[i][2]
-        counts, edges = histogram(jumps[i], bins=100, density=True)
+        counts, edges = histogram(jumps[i], range=([-0.6, 0.6]),
+                                  bins=100, density=True)
         mids = (edges[1:] + edges[:-1]) / 2.
         ax.bar(mids, counts, color=c, edgecolor='none',
                width=mids[1] - mids[0])
