@@ -2,13 +2,10 @@
 
 from math import *
 from numpy import *
-from scipy import ndimage 
-
-from joblib import Parallel, delayed
-from joblib.pool import has_shareable_memory
 from timeit import default_timer as timer
 
 execfile('../common/figures.py')
+
 
 def landscapes(x, shift=0):
     period = 2 * pi
@@ -47,20 +44,13 @@ def force(i, dx, energy):
     force = -((energy[i+1] - energy[i]) / dx)
     if debug:
         print('Force = {}'.format(force))
-    return float(force)
+    return force
 
 
-def force_lookup(array, value):
-    # Find the nearest index of the reaction coordinate.
-    nearest_index = find_nearest(array[:, 0], value)
-    
-    # import pdb; pdb.set_trace()
-    
-    # push = interp(value, array[:, 0][nearest_index-1:nearest_index+2],
-    #               array[:, 1][nearest_index-1:nearest_index+2])
-    push = interp(value, array[:, 0], array[:, 1])
+def force_lookup(q, array, value):
+    push = interp(value, q, array)
 
-    if random.rand() > 1.1:
+    if debug:
         fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
                                           h_pad=0.2, figsize=(12, 12))
         ax = axes[0][0]
@@ -77,8 +67,12 @@ def force_lookup(array, value):
 
     return(push)
 
+def energy_lookup(position, energy, value):
+    light = interp(value, position, energy)
+    return(light)
 
-def simulate(x, dx, D, kT, dt, shift, forces, i, **kwargs):
+
+def simulate(x, dx, D, kT, dt, shift, forces, energy, i, **kwargs):
 
     ##################################
     # BROWNIAN MOTION ON THE LANDSCAPE
@@ -87,17 +81,35 @@ def simulate(x, dx, D, kT, dt, shift, forces, i, **kwargs):
     jumps = []            # List of walker steps
     fluxes = []           # List of PBC transitions (+/- 1)
     # positions.append(x)   # Set initial position
-
+    reason = -1           # No jump
     if debug:
         print('Starting walker at x = {}'.format(x))
     for t in range(timesteps):
-        swap = 0
+        #######################################
+        # MONTE CARLO CHECK TO STEP ORTHOGONAL
+        #######################################
+        if (t % MC_time == 0 and t > MC_time and MC == True):
+            E_transition = energy_lookup(q, energy[(i+1) % 2], x)
+            E_now = energy_lookup(q, energy[i], x)
+            # This might not be necessary:
+            # E_step = energy_lookup(q, energy[i], candidate_step)
+            if debug:
+                print 'Current energy = {}'.format(E_now)
+                print 'Energy step to new landscape = {}'.format(E_transition)
+            delta = E_transition - E_now
+            p_accept = exp(-delta/kT)
+            r = random.random()
+            if (delta < 0):
+                print('Move because delta < 0 after {} steps.'.format(t))
+                reason = 0
+                break  # Kills the for() loop
+            if (p_accept > r):
+                print('Move because p_accept > r after {} steps'.format(t))
+                reason = 1
+                break  # Kills the for() loop
         g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
-#        F = force(x, dx, shift)
-        F = force_lookup(forces[i], x)
+        F = force_lookup(q[:-1], forces[i], x)
         new_x = x + (D / kT) * F * dt + g
-        if deterministic:
-            new_x = x + F * dt
         if debug:
             print 't = {} \t x = {}, force * dt = {}, new_x = {}' \
                   .format(float(t), float(x),
@@ -109,8 +121,6 @@ def simulate(x, dx, D, kT, dt, shift, forces, i, **kwargs):
             if debug:
                 print 'Wrapping {} to {}' \
                       .format(new_x, min(q) + (new_x - max(q)))
-                print 'Setting swap to {}'.format(swap)
-                print 'Jump = {}'.format(new_x - x + swap * (max(q) - min(q)))
         elif new_x < min(q):
             if debug:
                 print 'Wrapping {} to {}'.format(new_x, max(q) -
@@ -123,26 +133,40 @@ def simulate(x, dx, D, kT, dt, shift, forces, i, **kwargs):
         positions.append(new_x)
         jump = new_x - x + swap * (max(q) - min(q))
         if (abs(jump) > max(q)):
-            print new_x
-            print x
-            print swap
-            print 'Jump =  {} '.format(new_x - x + swap * (max(q) - min(q)))
-            print 'WARNING: JUMPED ACROSS AN ENTIRE LANDSCAPE.'
+            print 'Jumps are too big.'
         jumps.append(jump)
         x = new_x
-
-    if debug:
-        print 'Final x = {}'.format(x)
-        fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
-                                          h_pad=0.2, figsize=(12, 12))
-        ax = axes[0][0]
-        counts, edges = histogram(jumps, bins=100, density=True)
-        mids = (edges[1:] + edges[:-1]) / 2.
-        ax.bar(mids, counts, color='g', edgecolor='none',
-               width=mids[1] - mids[0])
-        ax.set_title('Steps')
-        plt.savefig('figure.png')
-        plt.close()
+    fig, gs, axes = generate_axes_pad(nrows=1, ncols=1, v_pad=0.3,
+                                      h_pad=0.2, figsize=(12, 12))
+    ax = axes[0][0]
+    ax.plot(q, energy[i], color='k', lw=2)
+    ax.set_title('Energy landscape {} \n'
+                 '{} steps taken, final $x = {:3.2f}$'.format(i, len(positions), positions[-1]), fontsize=fs['title'])
+    if len(positions) > 0:
+        colors = range(len(positions))
+        if reason == 0:
+            lbl = 'Jumped because $\Delta E < 0$'
+        elif reason == 1:
+            lbl = 'Jumped because $p_\\text{accept} < r$'
+        else:
+            lbl = 'No Monte Carlo jump'
+        cax = ax.scatter(positions,
+                         [energy_lookup(q, energy[i], positions[k])
+                          for k in range(len(positions))],
+                         c=colors, cmap=cm.jet, s=200, lw=0,
+                         zorder=10, alpha=0.05,
+                         label=lbl)
+        # cbar = fig.colorbar(cax, ticks=[0, len(positions)])
+        # cbar.ax.set_yticklabels(['Start', 'End'])
+        # cbar.set_alpha(1)
+        # cbar.draw_all()
+        ax.legend(fontsize=fs['title'])
+        ax.set_ylabel('Energy', fontsize=fs['axlabel'])
+        ax.set_xlabel('Reaction coordinate', fontsize=fs['axlabel'])
+        ax.tick_params(labelsize=fs['ticks'])
+        ax.grid()
+    plt.savefig('landscape_{}.png'.format(i))
+    plt.close()
 
     return(positions, jumps, fluxes)
 
@@ -150,11 +174,12 @@ def simulate(x, dx, D, kT, dt, shift, forces, i, **kwargs):
 #################################
 # PARAMETERS
 #################################
-debug, deterministic = False, False                 # Tests
+debug, deterministic, MC = False, False, True                # Tests
 plot_together = True
 
-num_landscapes = 3
+num_landscapes = 6
 # Number of protein states
+# This is now a misnomer; it is really number of instances of 2 states.
 dx = 0.01
 # Reaction coordinate spacing,
 # although the walker is basically
@@ -163,32 +188,28 @@ q = arange(0, 2 * pi, dx)
 # Define reaction coordinate
 dt = 1
 # Time resolution (not really used)
-timesteps = 100000
+timesteps = 1000000
 # Number of steps for walker on each landscape
 D = 0.01
 # Arbitrary -- these two work together!
 kT = 10
 # Arbitrary -- these two work together!
+MC_time = 1000
+# Number of steps between Monte Carlo iterations
 
+#################################
+# SIMULATE
+#################################
 
-walker = zeros((num_landscapes, timesteps))
-jumps = zeros((num_landscapes, timesteps))
-net_flux = zeros((num_landscapes, timesteps))
+walker = [[] for i in range(num_landscapes)]
+jumps = [[] for i in range(num_landscapes)]
+net_flux = [[] for i in range(num_landscapes)]
 
 shift = [0 if i % 2 == 0 else pi for i in range(num_landscapes)]
 energy = [landscapes(q, shift[i]) for i in range(num_landscapes)]
+forces = [[force(k, dx, energy[i]) for k in range(len(q)-1)] for i in range(num_landscapes)]
 boltzmann = [exp(-energy[i]/kT) for i in range(num_landscapes)]
 pdf = [boltzmann[i] / sum(boltzmann[i]*dx) for i in range(num_landscapes)]
-
-# Precompute the forces!
-# Forces are being passed indices for energy, not positions now!
-# forces = [[((q[k], force(k, dx, energy[i]))) for k in range(len(q)-1)]
-#          for i in range(num_landscapes)]
-
-forces = array([[[q[k], force(k, dx, energy[i])] for k in range(len(q)-1)]
-                for i in range(num_landscapes)])
-
-
 
 start = timer()
 for i in range(num_landscapes):
@@ -197,46 +218,47 @@ for i in range(num_landscapes):
     else:
         position = walker[i-1][-1]
     print('Walking on landscape {}'.format(i))
-    walker[i], jumps[i], net_flux[i] = simulate(position, dx,
-                                                 D, kT, dt, shift[i], forces, i)
+    tmp = simulate(position, dx, D, kT, dt, shift[i], forces, energy, i)
+
+    print 'Adding {} to walker {}'.format(len(tmp[0]), i % 2)
+    walker[i] = tmp[0]
+    jumps[i] = tmp[1]
+    net_flux[i] = tmp[2]
+
 simulation_time = timer() - start
 print('Simulation took {} seconds'.format(simulation_time))
 
-fluxes = sum(net_flux, axis=1)
-print('Overall net flux = {}'.format(sum(net_flux)))
+fluxes = [sum(net_flux[i]) for i in range(len(net_flux))]
+################################
+# CONDENSE THE DATA
+################################
+############????????????????????
+print('Overall net flux = {}'.format(sum(fluxes)))
+
+
+#################################
+# PLOT
+#################################
 
 if plot_together:
-    fig, gs, axes = generate_axes_pad(nrows=num_landscapes, ncols=3, v_pad=0.3,
+    fig, gs, axes = generate_axes_pad(nrows=2, ncols=2, v_pad=0.3,
                                       h_pad=0.2, figsize=(12, 12))
-
-    ##################################
-    # PLOTTING LANDSCAPES TOGETHER
-    ##################################
-    for i in range(num_landscapes):
+    for i in range(2):
         c = clrs[i % 9]
         ax = axes[i][0]
-#        ax.scatter(walker[i][0], landscapes(walker[i][0], shift=shift[i]),
-#                   color='k', s=40, zorder=10, label='Start')
-#        ax.scatter(walker[i][-1], landscapes(walker[i][-1], shift=shift[i]),
-#                   color='k', alpha=0.5, s=40, zorder=10, label='End')
         ax.plot(q, energy[i], color=c, lw=2)
         ax.set_title('Energy landscape')
 
         ax = axes[i][1]
-        counts, edges = histogram(walker[i], range=(min(q), max(q)),
+        # i = 0, then walker[0], walker[2], walker[4]
+        # i = 1, then walker[1], walker[3], walker[5]
+        counts, edges = histogram(hstack(walker[i::2]), range=(min(q), max(q)),
                                   bins=len(q), density=True)
         mids = (edges[1:] + edges[:-1]) / 2.
         ax.bar(mids, counts, color=c, edgecolor='none',
-               width=mids[1] - mids[0])
-        ax.plot(q, pdf[i], color='k', lw=2, label='kT = {}'.format(kT))
+               width=mids[1] - mids[0], label='{} steps'.format(len(hstack(walker[i::2]))))
+        ax.plot(q, pdf[i], color='k', lw=2)
         ax.set_title('Net flux = {}, kT = {}'.format(fluxes[i], kT))
 
-        ax = axes[i][2]
-        counts, edges = histogram(jumps[i], range=([-0.6, 0.6]),
-                                  bins=100, density=True)
-        mids = (edges[1:] + edges[:-1]) / 2.
-        ax.bar(mids, counts, color=c, edgecolor='none',
-               width=mids[1] - mids[0])
-        ax.set_title('Step sizes')
         ax.legend()
-plt.show()
+    plt.show()
