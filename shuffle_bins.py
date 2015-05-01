@@ -127,10 +127,10 @@ def simulate(x, dx, D, kT, dt, shift, forces, energies, i, steps_on_this_landsca
                 if debug:
                     print('t = {}, landscape = {}, x = {}, status = {}'.
                           format(t, state, x, str('MC ACCEPT (delta E)')))
-                    print('Recording position = {}'.format(x))
-                positions.append(x)
-                fluxes.append(0)
-                t += 1
+                #    print('Recording position = {}'.format(x))
+                #positions.append(x)
+                #fluxes.append(0)
+                #t += 1
                 break
             # If delta !< 0, compute p_accept and pick a random number.
             p_accept = exp(-delta/kT)
@@ -139,10 +139,10 @@ def simulate(x, dx, D, kT, dt, shift, forces, energies, i, steps_on_this_landsca
                 if debug:
                     print('t = {}, landscape = {}, x = {}, status = {}'.
                           format(t, state, x, str('MC ACCEPT (p_accept > r)')))
-                    print('Recording position = {}'.format(x))
-                positions.append(x)
-                fluxes.append(0)
-                t += 1
+                #    print('Recording position = {}'.format(x))
+                #positions.append(x)
+                #fluxes.append(0)
+                #t += 1
                 break
             # If p_accept !> r, append the current position and 
             # then take a Brownian dynamics step.
@@ -176,9 +176,9 @@ dt = 1
 # Time resolution
 # Don't change this because it is tied in with the array spacing
 # e.g. positions[1] - positions[0] is the step from time 0 to time 1.
-MC_interval = 100
+MC_interval = 1
 # Number of steps between Monte Carlo iterations
-total_timesteps = 1000000
+total_timesteps = 100000
 # Cumulative number of steps   for the simulation (across landscapes)
 D = 0.01
 # Arbitrary -- these two work together!
