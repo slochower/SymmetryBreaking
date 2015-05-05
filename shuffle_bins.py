@@ -8,7 +8,7 @@ import time
 
 execfile('../common/figures.py')
 
-routine = ['BDMC']
+routine = ['BDMC', 'MCMC', 'BD2D'][-1]
 
 def energy(x, shift=0):
     period = 2 * pi
@@ -39,153 +39,39 @@ def energy_lookup(position, array, value):
     light = interp(value, position, array)
     return(light)
 
-# @profile
-def simulate(x, dx, D, kT, dt, shift, forces, energies, i, steps_on_this_landscape, **kwargs):
 
-    positions = []
-    fluxes = []
-    # Crossings of the flux barrier
-    # -1: left crossing of the boundary
-    #  0: no crossing this step
-    # +1: right crossing of the boundary
-    flux_point = pi
-
-    if (i % 2) == 0: 
-        state = 0
-    else:
-        state = 1
-
-    if debug:
-        print('\nStarting walker at x = {}'.format(x))
-        print('Running for a maximum of {} steps on this landscape'.format(steps_on_this_landscape))
-        print('Recording position = {}'.format(x))
-    # Record the initial position of the walker at t = 0 and set
-    # the flux at this time to be 0, by definition.
-    positions.append(x)
-    fluxes.append(0)
-    # Since we have recorded the position and flux, count that as a 
-    # time step.
-    t = 1
-    # Each iteration through the loop adds two timesteps: one for MC and
-    # one for BD, so if there is only 1 step remaining, then quit early.
-    quit_early = False
-    if steps_on_this_landscape == 1:
-        quit_early = True
-    while t < steps_on_this_landscape-1:
-        #######################################
-        # BROWNIAN WALK
-        #######################################
-        g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
-        F = force_lookup(q[:-1], forces[state], x)
-        new_x = x + (D / kT) * F * dt + g
-
-        if (abs(new_x - x) > max(q)):
-            raise Exception('Jumps are too big.')
-
-        #######################################
-        # MEASURE FLUX
-        #######################################
-        if (x < flux_point) and (new_x >= flux_point):
-            swap = 1
-        elif (x > flux_point) and (new_x <= flux_point):
-            swap = -1
-        else:
-            swap = 0
-
-        ########################################
-        # KEEP TRACK OF PBC CROSSINGS
-        ########################################
-        if new_x > max(q):
-            new_x = min(q) + (new_x - max(q))
-        elif new_x < min(q):
-            new_x = max(q) - abs(new_x - min(q))
-        if debug:
-            print('t = {}, landscape = {}, x = {}, new_x = {}, status = {}'.
-                  format(t, state, x, new_x, str('BD')))
-            print('Recording position = {}'.format(new_x))
-
-        ####################
-        # RECORD KEEPING
-        ####################
-        t += 1
-        fluxes.append(swap)
-        positions.append(new_x)
-        x = new_x
-        if quit_early: break
-        #######################################
-        # MONTE CARLO CHECK TO STEP ORTHOGONAL
-        #######################################
-        if (MC is False):
-            raise Execption('Brownian dynamics without MC is not implemented.')
-
-        if (MC is True and ((t+1) % MC_interval) == 0):
-            E_transition = energy_lookup(q, energies[(state+1) % 2], x)
-            E_now = energy_lookup(q, energies[state], x)
-            delta = E_transition - E_now
-            # If delta < 0, step to next landscape
-            if (delta < 0):
-                if debug:
-                    print('t = {}, landscape = {}, x = {}, status = {}'.
-                          format(t, state, x, str('MC ACCEPT (delta E)')))
-                #    print('Recording position = {}'.format(x))
-                #positions.append(x)
-                #fluxes.append(0)
-                #t += 1
-                break
-            # If delta !< 0, compute p_accept and pick a random number.
-            p_accept = exp(-delta/kT)
-            r = random.random()
-            if (p_accept > r):
-                if debug:
-                    print('t = {}, landscape = {}, x = {}, status = {}'.
-                          format(t, state, x, str('MC ACCEPT (p_accept > r)')))
-                #    print('Recording position = {}'.format(x))
-                #positions.append(x)
-                #fluxes.append(0)
-                #t += 1
-                break
-            # If p_accept !> r, append the current position and 
-            # then take a Brownian dynamics step.
-            if debug:
-                print('t = {}, landscape = {}, x = {}, status = {}'.
-                      format(t, state, x, str('MC FAIL')))
-                print('Recording position = {}'.format(x))
-            t += 1
-            positions.append(x)
-            fluxes.append(0)
-            pass
-
-    return(positions, fluxes)
 
 
 #################################
 # PARAMETERS
 #################################
-debug = False
+debug, debug_alternative, log = False, False, False
 MC = True
 flashing = False
 plot_together = True
-interpolation_tests, parameter_scan = False, False
+
+if log == True:
+    import sys
+    old_stdout = sys.stdout
+    log_file = open('shuffle_bins_log', 'w')
+    sys.stdout = log_file
 
 dx = 0.01
-# Reaction coordinate spacing, although the walker is basically 
-# a continuous variable.
+# Reaction coordinate spacing (necessary for interpolation)
 q = arange(0, 2 * pi, dx)
 # Define reaction coordinate
 dt = 1
-# Time resolution
-# Don't change this because it is tied in with the array spacing
-# e.g. positions[1] - positions[0] is the step from time 0 to time 1.
-MC_interval = 1
-# Number of steps between Monte Carlo iterations
-total_timesteps = 100000
-# Cumulative number of steps   for the simulation (across landscapes)
+# Time resolution (do not change this)
 D = 0.01
 # Arbitrary -- these two work together!
 kT = 10
 # Arbitrary -- these two work together!
 shift = [0, pi]
-
+# Offset between energy landscapes
+MC_interval = 1
+# Number of steps between Monte Carlo iterations (for moving landscapes)
+total_timesteps = 1000000
+# Cumulative number of steps for the simulation (across landscapes)
 
 ###################################
 # PRE-CALCULATE ENERGY, FORCE, PDF
@@ -209,12 +95,29 @@ steps_executed, landscapes_sampled, start = 0, 0, 0.0
 # Being really really explicit right now is necessary for understanding...
 steps_on_A, steps_on_B = 0, 0
 start_timer = timer()
+if 'BDMC' in routine:
+    print('Running mixed BD/MC')
+    execfile('BDMC.py')
+if 'MCMC' in routine:
+    print('Running MC/MC')
+    execfile('MCMC.py')
+
+if 'BD2D' in routine:
+    print('Running 2D BD')
+    execfile('2D_walk.py')
+
+
 
 while steps_executed < total_timesteps:
-    this_run = simulate(start, dx, D, kT, dt, shift, forces, energies,
+    if 'BDMC' in routine:
+        this_run = simulateBDMC(start, dx, D, kT, dt, shift, forces, energies,
                         landscapes_sampled, 
                         min(total_timesteps, total_timesteps - steps_executed))
-    
+    if 'MCMC' in routine:
+        this_run = simulateMCMC(start, dx, D, kT, dt, shift, forces, energies,
+                        landscapes_sampled, 
+                        min(total_timesteps, total_timesteps - steps_executed))
+        # print ('landscapes sampled = {}'.format(landscapes_sampled))
     on_A = (landscapes_sampled+1) % 2
     if on_A:
         walker[0][steps_on_A:steps_on_A+len(this_run[0])] = this_run[0]
@@ -229,7 +132,7 @@ while steps_executed < total_timesteps:
     
     steps_executed += len(this_run[0])
     landscapes_sampled += 1
-    
+
     if debug:
         print('Total steps = {}'.format(steps_executed))
 
@@ -248,9 +151,13 @@ A_flux = trim_zeros(net_flux[0], 'b')
 B_flux = trim_zeros(net_flux[1], 'b')
 
 print('Overall net flux = {}'.format(sum(A_flux)+sum(B_flux)))
-print('Ratio of steps on energy landscape A to B = {}'.
-      format(float(len(A)) / float(len(B))))
+if len(B) > 0:
+    print('Ratio of steps on energy landscape A to B = {}'.
+          format(float(len(A)) / float(len(B))))
 print('###############################################################')
+if log == True:
+    sys.stdout = old_stdout
+    log_file.close()
 
 if plot_together:
     fig, gs, axes = generate_axes_pad(nrows=2, ncols=2, v_pad=0.3,
@@ -267,10 +174,11 @@ if plot_together:
     ax.legend()
 
     ax = axes[1][0]
-    ax.step(range(len(A_flux)), cumsum(A_flux), color=c, lw=2)
+    ax.step([float(i)/1000 for i in range(len(A_flux))], cumsum(A_flux), color=c, lw=2)
     from matplotlib.ticker import MaxNLocator
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_xlabel('Steps on this landscape')
+    ax.set_xlabel('Steps on this landscape (thousands)')
+    ax.grid()
     ax.set_title('Net flux this landscape = {}\nTotal crossings = {}'.format(sum(A_flux), sum(A_flux != 0)))
 
     c = clrs[1]
@@ -284,10 +192,11 @@ if plot_together:
     ax.legend()
 
     ax = axes[1][1]
-    ax.step(range(len(B_flux)), cumsum(B_flux), color=c, lw=2)
+    ax.step([float(i)/1000 for i in range(len(B_flux))], cumsum(B_flux), color=c, lw=2)
     from matplotlib.ticker import MaxNLocator
     ax.yaxis.set_major_locator(MaxNLocator(integer=True))
-    ax.set_xlabel('Steps on this landscape')
+    ax.set_xlabel('Steps on this landscape (thousands)')
+    ax.grid()
     ax.set_title('Net flux this landscape = {}\nTotal crossings = {}'.format(sum(B_flux), sum(B_flux != 0)))
 
     
@@ -295,8 +204,3 @@ if plot_together:
          verticalalignment='top', size=fs['title'])
     plt.show()
 
-if interpolation_tests:
-    execfile('2D_walk.py')
-
-if parameter_scan is True:
-    execfile('parameter_scan.py')
