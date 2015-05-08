@@ -6,9 +6,15 @@ from scipy import ndimage
 from timeit import default_timer as timer
 import time
 
-execfile('../common/figures.py')
 
 routine = ['BDMC', 'MCMC', 'BD2D'][-1]
+if 'BDMC' in routine:
+    options = ['2D_MC']
+if 'BD2D' in routine:
+    options = []
+plot = True
+debug, debug_alternative, log = False, False, False
+
 
 def energy(x, shift=0):
     period = 2 * pi
@@ -35,131 +41,190 @@ def force_lookup(q, array, value):
     push = interp(value, q, array)
     return(push)
 
+
 def energy_lookup(position, array, value):
     light = interp(value, position, array)
     return(light)
 
 
-
-
 #################################
 # PARAMETERS
 #################################
-debug, debug_alternative, log = False, False, False
-MC = True
-flashing = False
-plot_together = True
-
 if log == True:
     import sys
     old_stdout = sys.stdout
     log_file = open('shuffle_bins_log', 'w')
     sys.stdout = log_file
 
-dx = 0.01
-# Reaction coordinate spacing (necessary for interpolation)
-q = arange(0, 2 * pi, dx)
-# Define reaction coordinate
-dt = 1
-# Time resolution (do not change this)
-D = 0.01
-# Arbitrary -- these two work together!
-kT = 10
-# Arbitrary -- these two work together!
-shift = [0, pi]
-# Offset between energy landscapes
-MC_interval = 1
-# Number of steps between Monte Carlo iterations (for moving landscapes)
-total_timesteps = 1000000
-# Cumulative number of steps for the simulation (across landscapes)
-
-###################################
-# PRE-CALCULATE ENERGY, FORCE, PDF
-###################################
-energies = [energy(q, shift[i]) for i in range(len(shift))]
-if flashing:
-    energies[1] = array([mean(energies[0])]*len(energies[0]))
-forces = [[force(k, dx, energies[i]) for k in range(len(q)-1)]
-          for i in range(len(energies))]
-boltzmann = [exp(-energies[i]/kT) for i in range(len(energies))]
-pdf = [boltzmann[i] / sum(boltzmann[i]*dx) for i in range(len(boltzmann))]
-
-##################################
-# SIMULATE
-##################################
-# N.B. total_timesteps is the maximum length that either dimension could be..
-# Infinitessimal chance the walker will be exactly zero for the last step,
-# so we can simply trim zeros from the array to condense the data later.
-walker, net_flux = zeros((2, total_timesteps)), zeros((2, total_timesteps))
-steps_executed, landscapes_sampled, start = 0, 0, 0.0
-# Being really really explicit right now is necessary for understanding...
-steps_on_A, steps_on_B = 0, 0
-start_timer = timer()
 if 'BDMC' in routine:
     print('Running mixed BD/MC')
+    # Only implemented for two 1D landscapes.
+    dx = 0.01
+    q = arange(0, 2 * pi, dx)
+    dt = 1
+    D = 0.01
+    kT = 10
+    shift = [0, pi]
+    MC_interval = 1
+    total_timesteps = 1000000
+    MC = True
+    flashing = False
+
     execfile('BDMC.py')
+    if '2D_MC' in options:
+        print('MC allowed to work on either surface.')
+        MC_side_attempts = 0
+        MC_orthogonal_attempts = 0
+
+    initialize_BDMC()
+    start_timer = timer()
+    while steps_executed < total_timesteps:
+        if '2D_MC' in options:
+            this_run = simulate_BDMC_both_surfaces(start, dx, D, kT, dt, shift, forces, energies, landscapes_sampled, min(total_timesteps, total_timesteps - steps_executed))
+            MC_orthogonal_attempts += this_run[2]
+            MC_side_attempts += this_run[3]
+        else:
+            this_run = simulate_BDMC(start, dx, D, kT, dt, shift, forces,
+                                    energies, landscapes_sampled,
+                                    min(total_timesteps, total_timesteps - steps_executed))
+        on_A = (landscapes_sampled+1) % 2
+        if on_A:
+            walker[0][steps_on_A:steps_on_A+len(this_run[0])] = this_run[0]
+            net_flux[0][steps_on_A:steps_on_A+len(this_run[1])] = this_run[1]
+            steps_on_A += len(this_run[0])
+            start = walker[0][steps_on_A-1]
+
+        else:
+            walker[1][steps_on_B:steps_on_B+len(this_run[0])] = this_run[0]
+            net_flux[1][steps_on_B:steps_on_B+len(this_run[1])] = this_run[1]
+            steps_on_B += len(this_run[0])
+            start = walker[1][steps_on_B-1]
+        
+        steps_executed += len(this_run[0])
+        landscapes_sampled += 1        
+    simulation_time = timer() - start_timer
+    print('###############################################################')
+    print('Simulation took {} seconds'.format(simulation_time))
+    print('Total landscapes sampled: {}'.format(landscapes_sampled))
+
+    A = trim_zeros(walker[0], 'b')
+    B = trim_zeros(walker[1], 'b')
+    A_flux = trim_zeros(net_flux[0], 'b')
+    B_flux = trim_zeros(net_flux[1], 'b')
+
+    print('Overall net flux = {}'.format(sum(A_flux)+sum(B_flux)))
+    if len(B) > 0:
+        print('Ratio of steps on energy landscape A to B = {}'.
+              format(float(len(A)) / float(len(B))))
+    print('###############################################################')
+
 if 'MCMC' in routine:
     print('Running MC/MC')
+    # Only implemented for two 1D landscapes.
+    dx = 0.01
+    q = arange(0, 2 * pi, dx)
+    dt = 1
+    D = 0.01
+    kT = 10
+    shift = [0, pi]
+    MC_interval = 1
+    total_timesteps = 1000000
+    MC = True
+    flashing = False
+
     execfile('MCMC.py')
 
+    energies, forces, boltzmann, pdf, walker, net_flux, steps_executed, landscapes_sampled, start, steps_on_A, steps_on_B = initialize_MCMC()
+    start_timer = timer()
+    while steps_executed < total_timesteps:
+        this_run = simulate_MCMC(start, dx, D, kT, dt, shift, forces,
+                                energies, landscapes_sampled,
+                                min(total_timesteps, total_timesteps - steps_executed))
+        on_A = (landscapes_sampled+1) % 2
+        if on_A:
+            walker[0][steps_on_A:steps_on_A+len(this_run[0])] = this_run[0]
+            net_flux[0][steps_on_A:steps_on_A+len(this_run[1])] = this_run[1]
+            steps_on_A += len(this_run[0])
+            start = walker[0][steps_on_A-1]
+
+        else:
+            walker[1][steps_on_B:steps_on_B+len(this_run[0])] = this_run[0]
+            net_flux[1][steps_on_B:steps_on_B+len(this_run[1])] = this_run[1]
+            steps_on_B += len(this_run[0])
+            start = walker[1][steps_on_B-1]
+        
+        steps_executed += len(this_run[0])
+        landscapes_sampled += 1        
+    simulation_time = timer() - start_timer
+    print('###############################################################')
+    print('Simulation took {} seconds'.format(simulation_time))
+    print('Total landscapes sampled: {}'.format(landscapes_sampled))
+
+    A = trim_zeros(walker[0], 'b')
+    B = trim_zeros(walker[1], 'b')
+    A_flux = trim_zeros(net_flux[0], 'b')
+    B_flux = trim_zeros(net_flux[1], 'b')
+
+    print('Overall net flux = {}'.format(sum(A_flux)+sum(B_flux)))
+    if len(B) > 0:
+        print('Ratio of steps on energy landscape A to B = {}'.
+              format(float(len(A)) / float(len(B))))
+    print('###############################################################')
+    
 if 'BD2D' in routine:
     print('Running 2D BD')
+    dx, dy = 0.01, 0.01
+    q = arange(0, 2 * pi, dx)
+    transition_distance = 40.0
+    y_one = [0]*len(q)
+    y_two = [0+transition_distance]*len(q)
+    r = mgrid[y_one[-1]:y_two[-1]:100j]
+    dt = 1
+    D = 0.01
+    kT = 10
+    total_timesteps = 10
+
+    MC = False
+    flashing = False
+
     execfile('2D_walk.py')
-
-
-
-while steps_executed < total_timesteps:
-    if 'BDMC' in routine:
-        this_run = simulateBDMC(start, dx, D, kT, dt, shift, forces, energies,
-                        landscapes_sampled, 
-                        min(total_timesteps, total_timesteps - steps_executed))
-    if 'MCMC' in routine:
-        this_run = simulateMCMC(start, dx, D, kT, dt, shift, forces, energies,
-                        landscapes_sampled, 
-                        min(total_timesteps, total_timesteps - steps_executed))
-        # print ('landscapes sampled = {}'.format(landscapes_sampled))
-    on_A = (landscapes_sampled+1) % 2
-    if on_A:
-        walker[0][steps_on_A:steps_on_A+len(this_run[0])] = this_run[0]
-        net_flux[0][steps_on_A:steps_on_A+len(this_run[1])] = this_run[1]
+    energy, force, boltzmann, pdf, walker, net_flux, steps_executed, landscapes_sampled, start, steps_on_A, steps_on_B = initialize_2DBD()
+    start_timer = timer()
+    while steps_executed < total_timesteps:
+        this_run = simulate_2DBD(start[0], dx, start[1], dy, D, kT, dt, force,
+                                energy, min(total_timesteps, total_timesteps - steps_executed))
+        walker[steps_on_A:steps_on_A+len(this_run[0])] = this_run[0]
+        net_flux[steps_on_A:steps_on_A+len(this_run[1])] = this_run[1]
         steps_on_A += len(this_run[0])
-        start = walker[0][steps_on_A-1]
-    else:
-        walker[1][steps_on_B:steps_on_B+len(this_run[0])] = this_run[0]
-        net_flux[1][steps_on_B:steps_on_B+len(this_run[1])] = this_run[1]
-        steps_on_B += len(this_run[0])
-        start = walker[1][steps_on_B-1]
-    
-    steps_executed += len(this_run[0])
-    landscapes_sampled += 1
 
-    if debug:
-        print('Total steps = {}'.format(steps_executed))
+        
+        steps_executed += len(this_run[0])
+        landscapes_sampled += 1        
+    simulation_time = timer() - start_timer
+    print('###############################################################')
+    print('Simulation took {} seconds'.format(simulation_time))
+    print('Total landscapes sampled: {}'.format(landscapes_sampled))
 
-    
-simulation_time = timer() - start_timer
-print('###############################################################')
-print('Simulation took {} seconds'.format(simulation_time))
-print('Total landscapes sampled: {}'.format(landscapes_sampled))
+    A = trim_zeros(walker[0], 'b')
+    B = trim_zeros(walker[1], 'b')
+    A_flux = trim_zeros(net_flux[0], 'b')
+    B_flux = trim_zeros(net_flux[1], 'b')
 
-################################
-# CONDENSE THE DATA
-################################
-A = trim_zeros(walker[0], 'b')
-B = trim_zeros(walker[1], 'b')
-A_flux = trim_zeros(net_flux[0], 'b')
-B_flux = trim_zeros(net_flux[1], 'b')
+    print('Overall net flux = {}'.format(sum(A_flux)+sum(B_flux)))
+    if len(B) > 0:
+        print('Ratio of steps on energy landscape A to B = {}'.
+              format(float(len(A)) / float(len(B))))
+    print('###############################################################')
 
-print('Overall net flux = {}'.format(sum(A_flux)+sum(B_flux)))
-if len(B) > 0:
-    print('Ratio of steps on energy landscape A to B = {}'.
-          format(float(len(A)) / float(len(B))))
-print('###############################################################')
+
+
 if log == True:
     sys.stdout = old_stdout
     log_file.close()
 
-if plot_together:
+if plot:
+    execfile('../common/figures.py')
+
     fig, gs, axes = generate_axes_pad(nrows=2, ncols=2, v_pad=0.3,
                                       h_pad=0.2, figsize=(12, 12))
 
@@ -203,4 +268,3 @@ if plot_together:
     fig.text (0.5, 0.98, 'Total landscapes = {}, MC interval = {}\nInitial Position = {}'.format(landscapes_sampled, MC_interval, float(0)), horizontalalignment='center',
          verticalalignment='top', size=fs['title'])
     plt.show()
-

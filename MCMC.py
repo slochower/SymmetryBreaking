@@ -1,4 +1,20 @@
-def simulateMCMC(x, dx, D, kT, dt, shift, forces, energies, i, steps_on_this_landscape, **kwargs):
+def initialize_MCMC():
+
+    energies = [energy(q, shift[i]) for i in range(len(shift))]
+    if flashing:
+        energies[1] = array([mean(energies[0])]*len(energies[0]))
+    forces = [[force(k, dx, energies[i]) for k in range(len(q)-1)]
+              for i in range(len(energies))]
+    boltzmann = [exp(-energies[i]/kT) for i in range(len(energies))]
+    pdf = [boltzmann[i] / sum(boltzmann[i]*dx) for i in range(len(boltzmann))]
+
+    walker, net_flux = zeros((2, total_timesteps)), zeros((2, total_timesteps))
+    steps_executed, landscapes_sampled, start = 0, 0, 0.0
+    steps_on_A, steps_on_B = 0, 0
+    return(energies, forces, boltzmann, pdf, walker, net_flux, steps_executed, landscapes_sampled, start, steps_on_A, steps_on_B)
+
+
+def simulate_MCMC(x, dx, D, kT, dt, shift, forces, energies, i, steps_on_this_landscape, **kwargs):
     positions = []
     fluxes = []
     flux_point = pi
