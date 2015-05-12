@@ -3,6 +3,7 @@
 from math import *
 from numpy import *
 from scipy import ndimage
+from scipy import interpolate
 from timeit import default_timer as timer
 import time
 
@@ -178,43 +179,34 @@ if 'BD2D' in routine:
     transition_distance = 40.0
     y_one = [0]*len(q)
     y_two = [0+transition_distance]*len(q)
-    r = mgrid[y_one[-1]:y_two[-1]:100j]
+    r = mgrid[y_one[-1]:y_two[-1]:complex(0,len(q))]
     dt = 1
     D = 0.01
     kT = 10
-    total_timesteps = 10
+    total_timesteps = 100
 
     MC = False
     flashing = False
 
     execfile('2D_walk.py')
-    energy, force, boltzmann, pdf, walker, net_flux, steps_executed, landscapes_sampled, start, steps_on_A, steps_on_B = initialize_2DBD()
+    energies, x_forces, y_forces, boltzmann, pdf, walker, net_flux, steps_executed, start = initialize_2DBD()
     start_timer = timer()
-    while steps_executed < total_timesteps:
-        this_run = simulate_2DBD(start[0], dx, start[1], dy, D, kT, dt, force,
-                                energy, min(total_timesteps, total_timesteps - steps_executed))
-        walker[steps_on_A:steps_on_A+len(this_run[0])] = this_run[0]
-        net_flux[steps_on_A:steps_on_A+len(this_run[1])] = this_run[1]
-        steps_on_A += len(this_run[0])
+    while steps_executed < total_timesteps-1:
+        this_run = simulate_2DBD(start[0], dx, start[1], dy, D, kT, dt, 
+            x_forces, y_forces, energies, 
+            min(total_timesteps, total_timesteps - steps_executed))
+        walker = array(this_run)
+        steps_executed += len(walker)
 
-        
-        steps_executed += len(this_run[0])
-        landscapes_sampled += 1        
     simulation_time = timer() - start_timer
     print('###############################################################')
     print('Simulation took {} seconds'.format(simulation_time))
-    print('Total landscapes sampled: {}'.format(landscapes_sampled))
-
-    A = trim_zeros(walker[0], 'b')
-    B = trim_zeros(walker[1], 'b')
-    A_flux = trim_zeros(net_flux[0], 'b')
-    B_flux = trim_zeros(net_flux[1], 'b')
-
-    print('Overall net flux = {}'.format(sum(A_flux)+sum(B_flux)))
-    if len(B) > 0:
-        print('Ratio of steps on energy landscape A to B = {}'.
-              format(float(len(A)) / float(len(B))))
     print('###############################################################')
+
+    plt.figure()
+    plt.imshow(energies, origin='lower left', extent=[q.min(), q.max(), r.min(), r.max()])
+    plt.scatter(walker[:,0],walker[:,1],s=120)
+    plt.show()
 
 
 

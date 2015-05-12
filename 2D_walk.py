@@ -1,4 +1,5 @@
 def initialize_2DBD():
+    print('Creating 2D energy surface and initializing simulation.')
     x = q
     y = r
     z_one = energy(x, shift=0)
@@ -10,65 +11,81 @@ def initialize_2DBD():
         percent = j/transition_distance
         z[where(y==j)[0][0]] = percent*z_one + (1-percent)*z_two
 
-    force = [[force_2DBD(i, dx, z[0][:], j, dy, z[:][0]) 
-              for i in range(len(x)-1)] for j in range(len(y)-1)]
+    ####################################################################
+    # Deprecated
+    #forces = [[force_2DBD(i, dx, z[0][:], j, dy, z[:][0]) 
+    #          for i in range(len(x)-1)] for j in range(len(y)-1)]
+    ####################################################################
+
+    # This is more ugly, but almost as fast, and much easier to 
+    # read if I separate out the forces into different arrays.
+    x_forces = array([[force(x_vals, dx, z[y_vals]) for x_vals in range(len(q)-1)] for y_vals in range(len(r)-1)])
+    y_forces = array([[force(y_vals, dy, z[:,x_vals]) for y_vals in range(len(r)-1)] for x_vals in range(len(q)-1)]).T
+
+    # Need to transpose for y in imshow, but not for x... (?)
+    #    In [108]: plt.figure; plt.imshow(array(x_forces),origin='lower left'); plt.xlabel('x (elements, not distance)'); plt.ylabel('y (elements, not distance)'); plt.title('Forces in the $\hat{x}$ direction'); plt.colorbar(); plt.show()
+    # In [106]: plt.figure; plt.imshow(array(y_forces).T,origin='lower left'); plt.xlabel('x (elements, not distance)'); plt.ylabel('y (elements, not distance)'); plt.title('Forces in the $\hat{y}$ direction'); plt.colorbar(); plt.show()
+
     boltzmann = [exp(-z[i]/kT) for i in range(len(z))]
     pdf = [boltzmann[i] / sum(boltzmann[i]*dx) for i in range(len(boltzmann))]
 
-    steps_executed, landscapes_sampled, start = 0, 0, 0.0
-    steps_on_A, steps_on_B = 0, 0
-    # Hoping I can store tuples in walker[] and have it be okay...
     walker, net_flux = zeros((1, total_timesteps)), zeros((1, total_timesteps))
+    start = [0.0, 0.0]
+    steps_executed = 0
 
-    start = (0.0, 0.0)
-
-    return(z, force, boltzmann, pdf, walker, net_flux, steps_executed, landscapes_sampled, start, steps_on_A, steps_on_B)
+    return(z, x_forces, y_forces, boltzmann, pdf, walker, net_flux, steps_executed, start)
 
 
-def force_2DBD(i, dx, x_array, j, dy, y_array):
-    F_x = -((x_array[i+1] - x_array[i]) / dx)
-    F_y = -((y_array[j+1] - y_array[j]) / dy)
-    return(F_x, F_y)
+def column(matrix, i):
+    return [row[i] for row in matrix]
 
 
 def force_lookup(q, array, value):
     push = interp(value, q, array)
     return(push)
 
-    
-def simulate_2DBD(x, dx, y, dy, D, kT, dt, forces, energies,steps_on_this_landscape, **kwargs):
+#@profile
+def force_lookup_2D(force_interpolation, x, y):
+    print('Interpolating force')
+    return force_interpolation(x,y)
+
+#@profile    
+def simulate_2DBD(x, dx, y, dy, D, kT, dt, x_forces, y_forces, energies,steps_on_this_landscape, **kwargs):
+
+    print('Calling simulation')
+    # Set up force interpolation functions once...
+    F_x = interpolate.interp2d(q[:-1], r[:-1], x_forces)
+    F_y = interpolate.interp2d(q[:-1], r[:-1], y_forces)
+
 
     positions = []
-    positions.append((x, y))
+    positions.append(hstack((x, y)))
     t = 1
     while t < steps_on_this_landscape-1:
+        print(t)
         #######################################
         # BROWNIAN WALK
         #######################################
         g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
-        # x forces at y = 0, I think... 
-        # No, I don't think is correct anymore.
-        # This is a roadblock for the simulation.
-        # In [48]: shape(forces)
-        # Out[48]: (99, 628, 2)
-
-
-        x_forces = [x[0] for x in force[0]]
-        F = force_lookup(q[:-1], force, x)
+        #F = force_lookup_2D(F_x, x, y)
+        F = F_x(x,y)
         new_x = x + (D / kT) * F * dt + g
         g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
-        F = force_lookup(r[:-1], force, y)
+        #F = force_lookup_2D(F_y, x, y)
+        F = F_y(x,y)
         new_y = y + (D / kT) * F * dt + g
+
+        # BOUNDARY CONDITIONS NEED TO BE HANDLED.
+
         ####################
         # RECORD KEEPING
         ####################
         t += 1
-        fluxes.append(swap)
-        positions.append(new_x, new_y)
+        positions.append(hstack((new_x, new_y)))
         x = new_x
         y = new_y
 
-    return(positions, fluxes)
+    return(positions)
 
 
 
