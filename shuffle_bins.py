@@ -1,14 +1,16 @@
 #!/usr/bin/python
 
-from math import *
+from math import pi
 from numpy import *
 from scipy import ndimage
 from scipy import interpolate
 from timeit import default_timer as timer
 import time
+import matplotlib.pyplot as plt
 
 
-routine = ['BDMC', 'MCMC', 'BD2D'][-1]
+
+routine = ['BDMC', 'MCMC', 'BD2D', 'BD_equilibrium'][-2]
 if 'BDMC' in routine:
     options = ['2D_MC']
 if 'BD2D' in routine:
@@ -57,6 +59,9 @@ if log == True:
     log_file = open('shuffle_bins_log', 'w')
     sys.stdout = log_file
 
+if 'BD_equilibrium' in routine:
+    print('Not implemented yet.')
+
 if 'BDMC' in routine:
     print('Running mixed BD/MC')
     # Only implemented for two 1D landscapes.
@@ -67,7 +72,7 @@ if 'BDMC' in routine:
     kT = 10
     shift = [0, pi]
     MC_interval = 1
-    total_timesteps = 1000000
+    total_timesteps = 1000
     MC = True
     flashing = False
 
@@ -177,13 +182,14 @@ if 'BD2D' in routine:
     dx, dy = 0.01, 0.01
     q = arange(0, 2 * pi, dx)
     transition_distance = 40.0
+    transition_distance = 2*pi
     y_one = [0]*len(q)
     y_two = [0+transition_distance]*len(q)
     r = mgrid[y_one[-1]:y_two[-1]:complex(0,len(q))]
     dt = 1
     D = 0.01
     kT = 10
-    total_timesteps = 100
+    total_timesteps = 1000000
 
     MC = False
     flashing = False
@@ -203,12 +209,83 @@ if 'BD2D' in routine:
     print('Simulation took {} seconds'.format(simulation_time))
     print('###############################################################')
 
-    plt.figure()
-    plt.imshow(energies, origin='lower left', extent=[q.min(), q.max(), r.min(), r.max()])
-    plt.scatter(walker[:,0],walker[:,1],s=120)
-    plt.show()
+    #plt.figure()
+    #plt.imshow(energies, origin='lower left', extent=[q.min(), q.max(), r.min(), r.max()])
+    #plt.scatter(walker[:,0],walker[:,1],s=60,alpha=0.005)
+    #plt.show()
+
+    #fig, gs, axes = generate_axes_pad(nrows=1, ncols=2, v_pad=0.3,
+    #                                  h_pad=0.2, figsize=(12, 6))
+    #ax = axes[0][0]
+    #H, xedges, yedges = histogram2d(array(pdf)[:,0], array(pdf)[:,1], bins=[len(q),len(r)], normed=True)
+    #X, Y = meshgrid(xedges, yedges)
+    #ax.pcolormesh(X, Y, H)
+
+    #ax.imshow(pdf, origin='lower left', extent=[q.min(), q.max(), r.min(), r.max()])
+    #ax.set_aspect('equal')
+    #ax.set_title('PDF')
+    #ax = axes[0][1]
+    #H, xedges, yedges = histogram2d(walker[:,0], walker[:,1], bins=[len(q),len(r)],
+    #                                normed=True)
+    #X, Y = meshgrid(xedges, yedges)
+    #ax.pcolormesh(X, Y, H)
+    #ax.set_aspect('equal')
+    #ax.set_title('Histogram of positions')
+    #plt.show()
 
 
+    # x = q.ravel()
+    # y = r.ravel()
+    # z = pdf.ravel()
+    #fig, gs, axes = generate_axes_pad(nrows=1, ncols=4, v_pad=0.3,
+    #                                  h_pad=0.2, figsize=(12, 6))
+    # fig = plt.figure()
+    # gs = gridspec.GridSpec(1, 4, width_ratios=[10,1,10,1], wspace=0.4)
+    # ax = plt.subplot(gs[0])
+    # X, Y = meshgrid(q, r)
+    # x = X.ravel()
+    # y = Y.ravel()
+    # z = array(pdf).ravel()
+    # im = ax.hexbin(x, y, C=z)
+    # ax.set_title('PDF')
+
+    # ax = plt.subplot(gs[1])
+    # plt.colorbar(im, cax=ax)
+    
+    # ax = plt.subplot(gs[2])
+    # im = ax.hexbin(walker[:,0], walker[:,1])
+    # #cb = plt.colorbar()
+    # ax.set_title('Histogram of positions')
+
+    # ax = plt.subplot(gs[3])
+    # plt.colorbar(im, cax=ax)
+
+    # plt.show()
+
+    f = plt.figure(1)
+    X, Y = meshgrid(q, r)
+    x = X.ravel()
+    y = Y.ravel()
+    z = array(pdf).ravel()
+    plt.hexbin(x, y, C=z)
+    plt.title('PDF')
+    plt.colorbar()
+
+    g = plt.figure(2)
+    hb = plt.hexbin(walker[:,0], walker[:,1])
+    plt.hexbin(walker[:,0], walker[:,1],
+           C=ones_like(walker[:,1], dtype=float) / hb.get_array().max(),
+           cmap=plt.cm.jet,
+           reduce_C_function=sum)
+
+    # http://stackoverflow.com/questions/29368295/matplotlib-hexbin-normalize
+
+    plt.title('Histogram of positions')
+    plt.colorbar()
+    f.show()
+    g.show()
+
+    plot = False
 
 if log == True:
     sys.stdout = old_stdout

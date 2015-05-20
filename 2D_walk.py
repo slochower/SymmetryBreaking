@@ -62,20 +62,28 @@ def simulate_2DBD(x, dx, y, dy, D, kT, dt, x_forces, y_forces, energies,steps_on
     positions.append(hstack((x, y)))
     t = 1
     while t < steps_on_this_landscape-1:
-        print(t)
         #######################################
         # BROWNIAN WALK
         #######################################
-        g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
-        #F = force_lookup_2D(F_x, x, y)
         F = F_x(x,y)
-        new_x = x + (D / kT) * F * dt + g
         g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
-        #F = force_lookup_2D(F_y, x, y)
-        F = F_y(x,y)
-        new_y = y + (D / kT) * F * dt + g
+        new_x = x + (D / kT) * F * dt + g
 
-        # BOUNDARY CONDITIONS NEED TO BE HANDLED.
+        if new_x > max(q):
+            new_x = min(q) + (new_x - max(q))
+        elif new_x < min(q):
+            new_x = max(q) - abs(new_x - min(q))
+
+        transition_region = 0.2
+        # (R - R_naught) / R_max
+        F = F_y(x,y) + ( (y - r.max()/2) / (r.max()/2 - transition_region))**12
+        # This works, but I'm trying a new way with a smooth wall:
+        # F = F_y(x,y)
+        g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
+        new_y = y + (D / kT) * F * dt + g
+        # while (new_y > max(r) or new_y < min(r)):
+        #    g = random.normal(loc=0.0, scale=sqrt(2 * D * dt))
+        #    new_y = y + (D / kT) * F * dt + g
 
         ####################
         # RECORD KEEPING
